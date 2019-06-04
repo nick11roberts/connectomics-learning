@@ -1,0 +1,98 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from .node import NodeOp
+from .dag_layer import DAGLayer
+from .sep_conv import SeparableConv2d
+
+
+class RandWire(nn.Module):
+    def __init__(self, hp, graphs, in_channels=3):
+        super(RandWire, self).__init__()
+        self.chn = hp.model.channel
+        self.cls = hp.model.classes
+        self.in_channels = in_channels
+
+        # didn't used nn.Sequential for debugging purpose
+        # self.conv1 = SeparableConv2d(1, self.chn//2, kernel_size=3, padding=1, stride=2)
+        self.conv1 = nn.Conv2d(self.in_channels, self.chn//2, kernel_size=3, padding=1, stride=2)
+        self.bn1 = nn.BatchNorm2d(self.chn//2)
+        ### TODO TMP ###
+        for param in self.conv1.parameters():
+            param.requires_grad = False
+        for param in self.bn1.parameters():
+            param.requires_grad = False
+        ### TODO TMP ###
+        # self.conv2 = SeparableConv2d(self.chn//2, self.chn, kernel_size=3, padding=1, stride=2)
+        self.conv2 = nn.Conv2d(self.chn//2, self.chn, kernel_size=3, padding=1, stride=2)
+        self.bn2 = nn.BatchNorm2d(self.chn)
+        ### TODO TMP ###
+        for param in self.conv2.parameters():
+            param.requires_grad = False
+        for param in self.bn2.parameters():
+            param.requires_grad = False
+        ### TODO TMP ###
+        
+        #self.conv22 = nn.Conv2d(self.chn, self.chn*4, kernel_size=3, padding=1, stride=2)
+        #for param in self.conv22.parameters():
+        #    param.requires_grad = False
+        #self.bn22 = nn.BatchNorm2d(self.chn*4)
+        #for param in self.bn22.parameters():
+        #    param.requires_grad = False
+        
+        self.dagly3 = DAGLayer(self.chn, 4*self.chn, graphs[0]['num_nodes'], graphs[0]['edges'])
+        #for param in self.dagly3.parameters():
+        #    param.requires_grad = False
+        #self.dagly4 = DAGLayer(self.chn, 2*self.chn, graphs[1]['num_nodes'], graphs[1]['edges'])
+        #self.dagly5 = DAGLayer(2*self.chn, 4*self.chn, graphs[2]['num_nodes'], graphs[2]['edges'])
+        # self.convlast = SeparableConv2d(4*self.chn, 1280, kernel_size=1)
+        self.convlast = nn.Conv2d(4*self.chn, 1280, kernel_size=1)
+        self.bnlast = nn.BatchNorm2d(1280)
+        ### TODO TMP ###
+        for param in self.convlast.parameters():
+            param.requires_grad = False
+        for param in self.bnlast.parameters():
+            param.requires_grad = False
+        ### TODO TMP ###
+        self.fc = nn.Linear(1280, self.cls)
+        ### TODO TMP ###
+        for param in self.fc.parameters():
+            param.requires_grad = False
+        ### TODO TMP ###
+        
+        
+
+    def forward(self, y):
+        # y: [B, 3, 224, 224]
+        # conv1
+        y = self.conv1(y) # [B, chn//2, 112, 112]
+        y = self.bn1(y) # [B, chn//2, 112, 112]
+
+        # conv2
+        y = F.relu(y) # [B, chn//2, 112, 112]
+        y = self.conv2(y) # [B, chn, 56, 56]
+        y = self.bn2(y) # [B, chn, 56, 56]
+        
+        
+        
+        #y = F.relu(y) # [B, chn//2, 112, 112]
+        #y = self.conv22(y) # [B, chn, 56, 56]
+        #y = self.bn22(y) # [B, chn, 56, 56]
+
+        
+        
+        # conv3, conv4, conv5
+        y = self.dagly3(y) # [B, chn, 28, 28]
+        #y = self.dagly4(y) # [B, 2*chn, 14, 14]
+        #y = self.dagly5(y) # [B, 4*chn, 7, 7]
+
+        # classifier
+        y = F.relu(y) # [B, 4*chn, 7, 7]
+        y = self.convlast(y) # [B, 1280, 7, 7]
+        y = self.bnlast(y) # [B, 1280, 7, 7]
+        y = F.adaptive_avg_pool2d(y, (1, 1)) # [B, 1280, 1, 1]
+        y = y.view(y.size(0), -1) # [B, 1280]
+        y = self.fc(y) # [B, cls]
+        y = F.log_softmax(y, dim=1) # [B, cls]
+        return y
